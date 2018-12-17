@@ -403,6 +403,11 @@ public class Prism extends PrismComponent implements PrismSettingsListener
 		settings.set(PrismSettings.PRISM_FIX_DEADLOCKS, b);
 	}
 
+	public void setSortStates(boolean b) throws PrismException
+	{
+		settings.set(PrismSettings.PRISM_SORT_STATES, b);
+	}
+
 	public void setDoProbChecks(boolean b) throws PrismException
 	{
 		settings.set(PrismSettings.PRISM_DO_PROB_CHECKS, b);
@@ -737,6 +742,11 @@ public class Prism extends PrismComponent implements PrismSettingsListener
 	public boolean getFixDeadlocks()
 	{
 		return settings.getBoolean(PrismSettings.PRISM_FIX_DEADLOCKS);
+	}
+
+	public boolean getSortStates()
+	{
+		return settings.getBoolean(PrismSettings.PRISM_SORT_STATES);
 	}
 
 	public boolean getDoProbChecks()
@@ -2054,6 +2064,7 @@ public class Prism extends PrismComponent implements PrismSettingsListener
 					}
 					ConstructModel constructModel = new ConstructModel(this);
 					constructModel.setFixDeadlocks(getFixDeadlocks());
+					constructModel.setSortStates(getSortStates());
 					constructModel.setBuildSparse(false);
 					currentModelExpl = constructModel.constructModel(currentModelGenerator);
 					currentModel = null;
@@ -2070,6 +2081,7 @@ public class Prism extends PrismComponent implements PrismSettingsListener
 				} else {
 					ConstructModel constructModel = new ConstructModel(this);
 					constructModel.setFixDeadlocks(getFixDeadlocks());
+					constructModel.setSortStates(getSortStates());
 					currentModelExpl = constructModel.constructModel(currentModelGenerator);
 					currentModel = null;
 				}
