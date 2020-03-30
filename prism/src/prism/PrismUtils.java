@@ -30,9 +30,12 @@ import java.io.FileNotFoundException;
 import java.io.PrintStream;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.PrimitiveIterator;
+import java.util.Set;
+import java.util.Map.Entry;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -167,6 +170,35 @@ public class PrismUtils
 					return false;
 			}
 		}
+		return true;
+	}
+
+	/**
+	 * See if two arrays of doubles are all within epsilon of each other (relative or absolute error).
+	 */
+	public static boolean hashMapsAreClose(HashMap map1, HashMap map2, double epsilon, boolean abs)
+	{
+		if (map1.size()!=map2.size()){
+			return false;
+		}
+		Set<Entry> entries= map1.entrySet();
+		for (Entry entry : entries)
+		{
+			double d1=(double) entry.getValue();
+			double d2;
+			if(map2.get(entry.getKey())!=null){
+				d2=(double) map2.get(entry.getKey());
+				if (abs) {				
+					if (!PrismUtils.doublesAreCloseAbs(d1, d2, epsilon))
+						return false;				
+				} else {				
+					if (!PrismUtils.doublesAreCloseRel(d1, d2, epsilon))
+						return false;				
+				}
+			}else {
+				return false;
+			}
+		}		
 		return true;
 	}
 

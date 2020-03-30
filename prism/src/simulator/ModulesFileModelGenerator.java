@@ -166,6 +166,12 @@ public class ModulesFileModelGenerator implements ModelGenerator, RewardGenerato
 	}
 
 	@Override
+	public List<String> getObservableVars()
+	{
+		return modulesFile.getObservableVars();
+	}
+	
+	@Override
 	public int getNumLabels()
 	{
 		return labelList.size();	

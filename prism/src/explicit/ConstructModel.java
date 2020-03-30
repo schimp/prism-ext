@@ -29,11 +29,14 @@ package explicit;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.LinkedList;
 import java.util.List;
 
+import parser.Observation;
 import parser.State;
+import parser.Unobservation;
 import parser.Values;
 import parser.VarList;
 import prism.ModelGenerator;
@@ -169,6 +172,7 @@ public class ConstructModel extends PrismComponent
 		DTMCSimple dtmc = null;
 		CTMCSimple ctmc = null;
 		MDPSimple mdp = null;
+		POMDPSimple pomdp = null;
 		CTMDPSimple ctmdp = null;
 		ModelExplicit model = null;
 		Distribution distr = null;
@@ -206,6 +210,10 @@ public class ConstructModel extends PrismComponent
 			case MDP:
 				modelSimple = mdp = new MDPSimple();
 				mdp.setVarList(varList);
+				break;
+			case POMDP:
+				modelSimple = pomdp = new POMDPSimple();
+				pomdp.setVarList(varList);
 				break;
 			case CTMDP:
 				modelSimple = ctmdp = new CTMDPSimple();
@@ -272,6 +280,7 @@ public class ConstructModel extends PrismComponent
 							ctmc.addToProbability(src, dest, modelGen.getTransitionProbability(i, j));
 							break;
 						case MDP:
+						case POMDP:
 						case CTMDP:
 							distr.add(dest, modelGen.getTransitionProbability(i, j));
 							break;
@@ -290,6 +299,12 @@ public class ConstructModel extends PrismComponent
 							mdp.addActionLabelledChoice(src, distr, modelGen.getChoiceAction(i));
 						} else {
 							mdp.addChoice(src, distr);
+						}
+					} else if (modelType == ModelType.POMDP) {
+						if (distinguishActions) {
+							pomdp.addActionLabelledChoice(src, distr, modelGen.getChoiceAction(i));
+						} else {
+							pomdp.addChoice(src, distr);
 						}
 					} else if (modelType == ModelType.CTMDP) {
 						if (distinguishActions) {
@@ -333,6 +348,64 @@ public class ConstructModel extends PrismComponent
 		states = null;
 		//mainLog.println(statesList);
 
+		List<String> observableVars = null;
+		List<String> unobservableVars = null;
+
+		List<Observation> observationsList = null;
+		List<Unobservation> unobservationsList = null;
+
+		if (!justReach && modelType == ModelType.POMDP) {
+			// find unobservable variables
+			List<String> allVars = modelGen.getVarNames();
+			observableVars = modelGen.getObservableVars();
+
+			unobservableVars = new ArrayList<>();
+			for (String varName : allVars) {
+				if (!observableVars.contains(varName)) {
+					unobservableVars.add(varName);
+				}
+			}
+
+			// construct observations list and state-observation map for pomdp (with correct state and observation ordering)
+			observationsList = new ArrayList<>();
+			unobservationsList = new ArrayList<>();
+			;
+
+			for (i = 0; i < statesList.size(); i++) {
+				//				mainLog.print("state: "+i);
+				State s = statesList.get(i);
+				Values values1 = new Values(s, modelGen);
+				for (String unobservableVarName : unobservableVars) {
+					values1.removeValue(unobservableVarName);
+				}
+				Observation observ = new Observation(values1, modelGen);
+
+				int oIndex = observationsList.indexOf(observ);
+				if (oIndex == -1) {
+					observationsList.add(observ);
+					oIndex = observationsList.size() - 1;
+				}
+				//				mainLog.print("  observation:"+observ+"  "+ oIndex);
+				pomdp.setObservation(i, oIndex);
+
+				Values values2 = new Values(s, modelGen);
+				for (String observableVarName : observableVars) {
+					values2.removeValue(observableVarName);
+				}
+				Unobservation unobserv = new Unobservation(values2, modelGen);
+
+				int unobservIndex = unobservationsList.indexOf(unobserv);
+				if (unobservIndex == -1) {
+					unobservationsList.add(unobserv);
+					unobservIndex = unobservationsList.size() - 1;
+				}
+				//				mainLog.println("  unobservation:"+unobserv+"  "+ unobservIndex);	
+				pomdp.state_unobserv_map.put(i, unobservIndex);
+
+			}
+
+		}
+
 		// Construct new explicit-state model (with correct state ordering, if desired)
 		if (!justReach) {
 			switch (modelType) {
@@ -353,6 +426,9 @@ public class ConstructModel extends PrismComponent
 					model = sortStates ? new MDPSimple(mdp, permut) : mdp;
 				}
 				break;
+			case POMDP:
+				model = sortStates ? new POMDPSimple(pomdp, permut) : pomdp;
+				break;
 			case CTMDP:
 				model = sortStates ? new CTMDPSimple(ctmdp, permut) : ctmdp;
 				break;
@@ -363,6 +439,16 @@ public class ConstructModel extends PrismComponent
 				throw new PrismNotSupportedException("Model construction not supported for " + modelType + "s");
 			}
 			model.setStatesList(statesList);
+			model.setConstantValues(new Values(modelGen.getConstantValues()));
+			
+			if (!justReach && modelType == ModelType.POMDP) {
+				((POMDPSimple) model).setModelInfo(modelGen);
+				((POMDPSimple) model).setObservationsList(observationsList);
+				((POMDPSimple) model).setUnobservationsList(unobservationsList);
+				((POMDPSimple) model).setUnobservableVars(unobservableVars);
+				((POMDPSimple) model).checkObservations();
+			}
+			
 			model.setConstantValues(new Values(modelGen.getConstantValues()));
 			//mainLog.println("Model: " + model);
 		}
