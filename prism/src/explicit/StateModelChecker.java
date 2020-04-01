@@ -1005,6 +1005,7 @@ public class StateModelChecker extends PrismComponent
 		boolean b = false;
 		String resultExpl = null;
 		Object resObj = null;
+		Double resPrec = null; 
 		switch (op) {
 		case PRINT:
 		case PRINTALL:
@@ -1195,6 +1196,7 @@ public class StateModelChecker extends PrismComponent
 			// Find first (only) value
 			// Store as object/vector
 			resObj = vals.firstFromBitSet(bsFilter);
+			resPrec = vals.precision;
 			resVals = new StateValues(expr.getType(), resObj, model);
 			// Create explanation of result and print some details to log
 			resultExpl = "Value in ";
@@ -1226,6 +1228,7 @@ public class StateModelChecker extends PrismComponent
 
 		// Store result
 		result.setResult(resObj);
+		result.precision = resPrec;
 		// Set result explanation (if none or disabled, clear)
 		if (expr.getExplanationEnabled() && resultExpl != null) {
 			result.setExplanation(resultExpl.toLowerCase());

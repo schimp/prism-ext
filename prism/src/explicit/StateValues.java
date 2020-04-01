@@ -61,6 +61,8 @@ public class StateValues implements StateVector
 	protected int[] valuesI;
 	protected double[] valuesD;
 	protected BitSet valuesB;
+	
+	public double precision = Double.POSITIVE_INFINITY;
 
 	// Model info
 	protected List<State> statesList;
@@ -172,6 +174,13 @@ public class StateValues implements StateVector
 		return sv;
 	}
 
+	public static StateValues createFromDoubleArray(ModelCheckerResult res, Model model)
+	{
+		StateValues sv = createFromDoubleArray(res.soln, model);
+		sv.precision = res.precision;
+		return sv;
+	}
+	
 	/**
 	 * Create a new (double-valued) state values vector from an existing array of doubles.
 	 * The array is stored directly, not copied.

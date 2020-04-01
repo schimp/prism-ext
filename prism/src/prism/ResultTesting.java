@@ -54,7 +54,7 @@ public class ResultTesting
 	 * @param strExpected Expected result
 	 * @param constValues The values of any undefined constants (null or "" if none)
 	 * @param type The type of the property yielding this result
-	 * @param result The result to check
+	 * @param resultObj The result to check
 	 * @return Whether or not the check was performed
 	 */
 	public static boolean checkAgainstExpectedResultString(String strExpected, Values constValues, Type type, Result resultObj) throws PrismException
@@ -142,7 +142,8 @@ public class ResultTesting
 	 * given by a string extracted from a RESULT: specification.
 	 * If the test fails or something else goes wrong, an explanatory PrismException is thrown.
 	 * @param strExpected Expected result
-	 * @param result The actual result
+	 * @param constValues The values of any undefined constants (null or "" if none)
+	 * @param resultObj The actual result
 	 */
 	private static void checkBooleanAgainstExpectedResultString(String strExpected, Values constValues, Result resultObj) throws PrismException
 	{
@@ -172,6 +173,8 @@ public class ResultTesting
 	 * For the case where the expected result string is (or is suspected to be)
 	 * a PRISM expression, perhaps in terms of constants, parse and return it.
 	 * Throws an exception (invalid RESULT spec) if parsing fails.  
+	 * @param strExpected Expected result
+	 * @param constValues The values of any undefined constants (null or "" if none)
 	 */
 	private static Expression parseExpectedResultString(String strExpected, Values constValues) throws PrismException
 	{
@@ -190,7 +193,8 @@ public class ResultTesting
 	 * given by a string extracted from a RESULT: specification.
 	 * If the test fails or something else goes wrong, an explanatory PrismException is thrown.
 	 * @param strExpected Expected result
-	 * @param result The actual result
+	 * @param constValues The values of any undefined constants (null or "" if none)
+	 * @param resultObj The actual result
 	 */
 	private static void checkIntAgainstExpectedResultString(String strExpected, Values constValues, Result resultObj) throws PrismException
 	{
@@ -222,16 +226,11 @@ public class ResultTesting
 	 * given by a string extracted from a RESULT: specification.
 	 * If the test fails or something else goes wrong, an explanatory PrismException is thrown.
 	 * @param strExpected Expected result
-	 * @param result The actual result
+	 * @param constValues The values of any undefined constants (null or "" if none)
+	 * @param resultObj The actual result
 	 */
 	private static void checkDoubleAgainstExpectedResultString(String strExpected, Values constValues, Result resultObj) throws PrismException
 	{
-		// Extract actual result
-		Object result = resultObj.getResult();
-		if (!(result instanceof Double)) {
-			throw new PrismException("Result is wrong type (" + result.getClass() + ") for (double-valued) property");
-		}
-		double doubleRes = ((Double) result).doubleValue();
 		// Parse expected result
 		double doubleExp;
 		// First, handle ~... expected results
@@ -243,27 +242,97 @@ public class ResultTesting
 		// See if it's NaN
 		if (strExpected.equals("NaN")) {
 			doubleExp = Double.NaN;
+			checkDoubleAgainstExpectedResult(strExpected, doubleExp, resultObj);
+		}
+		// See if it's an interval
+		else if (strExpected.matches("\\[[^,]+,[^,]+\\]")) {
+			String bounds[] = strExpected.substring(1, strExpected.length() - 1).split(",");
+			try {
+				double expLow = Double.parseDouble(bounds[0]);
+				double expHigh = Double.parseDouble(bounds[1]);
+				checkDoubleAgainstExpectedResultInterval(strExpected, expLow, expHigh, resultObj);
+			} catch (NumberFormatException e) {
+				throw new PrismException("Invalid RESULT specification \"" + strExpected + "\": " + e.getMessage());
+			}
 		}
 		// See if it's a fraction
 		else if (strExpected.matches("-?[0-9]+/[0-9]+")) {
 			doubleExp = new BigRational(strExpected).doubleValue();
 			strExpected += " = " + doubleExp; 	
+			checkDoubleAgainstExpectedResult(strExpected, doubleExp, resultObj);
 		}
 		// See if it's a double literal
 		else try {
 			doubleExp = Double.parseDouble(strExpected);
+			checkDoubleAgainstExpectedResult(strExpected, doubleExp, resultObj);
 		}
 		// If not, could be an expression
 		catch (NumberFormatException e) {
 			doubleExp = parseExpectedResultString(strExpected, constValues).evaluateDouble(constValues);
 			strExpected += " = " + doubleExp; 	
+			checkDoubleAgainstExpectedResult(strExpected, doubleExp, resultObj);
 		}
-		// Check result
+	}
+	
+	/**
+	 * Tests a result of type double against the expected result, given as a double.
+	 * If the test fails or something else goes wrong, an explanatory PrismException is thrown.
+	 * @param strExpected Expected result string (for error message)
+	 * @param doubleExp Expected result
+	 * @param resultObj The actual result
+	 */
+	private static void checkDoubleAgainstExpectedResult(String strExpected, double doubleExp, Result resultObj) throws PrismException
+	{
+		// Extract actual result
+		Object result = resultObj.getResult();
+		if (!(result instanceof Double)) {
+			throw new PrismException("Result is wrong type (" + result.getClass() + ") for (double-valued) property");
+		}
+		double doubleRes = ((Double) result).doubleValue();
+		// Case where one/both is NaN
 		if (Double.isNaN(doubleRes) || Double.isNaN(doubleExp)) {
 			if (Double.isNaN(doubleRes) != Double.isNaN(doubleExp)) {
 				throw new PrismException("Wrong result (expected " + strExpected + ", got " + doubleRes + ")");
-			}	
-		} else if (!PrismUtils.doublesAreCloseRel(doubleExp, doubleRes, 1e-5)) {
+			}
+		}
+		// Case where one/both is infinite
+		else if (Double.isInfinite(doubleRes) || Double.isInfinite(doubleExp)) {
+			if (doubleRes != doubleExp) {
+				throw new PrismException("Wrong result (expected " + strExpected + ", got " + doubleRes + ")");
+			}
+		}
+		// Normal case: check result is in expected value overlap
+		else {
+			double absError = resultObj.precision == null ? 1e-5 * Math.abs(doubleExp) : resultObj.precision;
+			double resLow = doubleRes - absError;
+			double resHigh = doubleRes + absError;
+			if (!(resLow <= doubleExp && doubleExp <= resHigh)) {
+				throw new PrismException("Wrong result (expected " + strExpected + ", got " + doubleRes + ")");
+			}
+		}
+	}
+	
+	/**
+	 * Tests a result of type double against the expected result, given as a double.
+	 * If the test fails or something else goes wrong, an explanatory PrismException is thrown.
+	 * @param strExpected Expected result string (for error message)
+	 * @param doubleExp Expected result
+	 * @param resultObj The actual result
+	 */
+	private static void checkDoubleAgainstExpectedResultInterval(String strExpected, double expLow, double expHigh, Result resultObj) throws PrismException
+	{
+		// Extract actual result
+		Object result = resultObj.getResult();
+		if (!(result instanceof Double)) {
+			throw new PrismException("Result is wrong type (" + result.getClass() + ") for (double-valued) property");
+		}
+		double doubleRes = ((Double) result).doubleValue();
+		// Check intervals for result and expected value overlap
+		double absErrorLow = resultObj.precision == null ? 1e-5 * Math.abs(expLow) : resultObj.precision;
+		double resLow = doubleRes - absErrorLow;
+		double absErrorHigh = resultObj.precision == null ? 1e-5 * Math.abs(expHigh) : resultObj.precision;
+		double resHigh = doubleRes + absErrorHigh;
+		if (!(resLow <= expHigh && expLow <= resHigh)) {
 			throw new PrismException("Wrong result (expected " + strExpected + ", got " + doubleRes + ")");
 		}
 	}
@@ -273,7 +342,8 @@ public class ResultTesting
 	 * given by a string extracted from a RESULT: specification.
 	 * If the test fails or something else goes wrong, an explanatory PrismException is thrown.
 	 * @param strExpected Expected result
-	 * @param result The actual result
+	 * @param constValues The values of any undefined constants (null or "" if none)
+	 * @param resultObj The actual result
 	 */
 	private static void checkExactAgainstExpectedResultString(String strExpected, Values constValues, Type type, Result resultObj) throws PrismException
 	{
@@ -340,7 +410,8 @@ public class ResultTesting
 	 * given by a string extracted from a RESULT: specification.
 	 * If the test fails or something else goes wrong, an explanatory PrismException is thrown.
 	 * @param strExpected Expected result
-	 * @param result The actual result
+	 * @param constValues The values of any undefined constants (null or "" if none)
+	 * @param resultObj The actual result
 	 */
 	private static void checkParetoAgainstExpectedResultString(String strExpected, Values constValues, Result resultObj) throws PrismException
 	{
@@ -393,5 +464,80 @@ public class ResultTesting
 				throw new PrismException("The point " + point + " in the computed Pareto curve has no match among the points in the expected Pareto curve");
 			}
 		}
+	}
+	
+	/**
+	 * Check whether two doubles are within epsilon of each other
+	 * (absolute error; strict comparison),
+	 * i.e., whether abs(d1 - d2) < epsilon.
+	 */
+	public static boolean doublesAreCloseAbsStrict(double d1, double d2, double epsilon)
+	{
+		if (Double.isInfinite(d1)) {
+			return d1 == d2;
+		}
+		System.out.println(Math.abs(d1 - d2));
+		return Math.abs(d1 - d2) < epsilon;
+	}
+
+	/**
+	 * Check whether two doubles are within epsilon of each other
+	 * (absolute error; non-strict comparison),
+	 * i.e., whether abs(d1 - d2) <= epsilon.
+	 */
+	public static boolean doublesAreCloseAbsNonStrict(double d1, double d2, double epsilon)
+	{
+		if (Double.isInfinite(d1)) {
+			return d1 == d2;
+		}
+		return Math.abs(d1 - d2) <= epsilon;
+	}
+
+	/**
+	 * See if two doubles are within epsilon of each other
+	 * (relative error; strict comparison),
+	 * i.e., whether abs(d1 - d2 / d1) < epsilon.
+	 */
+	public static boolean doublesAreCloseRelStrict(double d1, double d2, double epsilon)
+	{
+		if (Double.isInfinite(d1)) {
+			return d1 == d2;
+		}
+		return Math.abs(d1 - d2 / d1) < epsilon;
+	}
+
+	/**
+	 * See if two doubles are within epsilon of each other
+	 * (relative error; strict comparison),
+	 * i.e., whether abs(d1 - d2 / d1) < epsilon.
+	 */
+	public static boolean doublesAreCloseRelNonStrict(double d1, double d2, double epsilon)
+	{
+		if (Double.isInfinite(d1)) {
+			return d1 == d2;
+		}
+		return Math.abs(d1 - d2 / d1) <= epsilon;
+	}
+	
+	/**
+	 * Test harness
+	 */
+	public static void main(String args[])
+	{
+		System.out.println(doublesAreCloseAbsStrict(1.0, 1.0, 1e-6) == true);
+		System.out.println(doublesAreCloseAbsStrict(1.0, 1.001, 1e-6) == false);
+		System.out.println(doublesAreCloseAbsStrict(1.0, 1.000001, 1e-6) == true);
+		System.out.println(doublesAreCloseAbsStrict(Double.POSITIVE_INFINITY, 1.0, 1e-6) == false);
+		System.out.println(doublesAreCloseAbsStrict(Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, 1e-6) == true);
+		System.out.println(doublesAreCloseAbsStrict(Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, 1e-6) == false);
+		System.out.println(doublesAreCloseAbsStrict(Double.POSITIVE_INFINITY, Double.NaN, 1e-6) == false);
+		
+		System.out.println(doublesAreCloseAbsNonStrict(1.0, 1.0, 1e-6) == true);
+		System.out.println(doublesAreCloseAbsNonStrict(1.0, 1.001, 1e-6) == false);
+		System.out.println(doublesAreCloseAbsNonStrict(1.0, 1.000001, 1e-6) == true);
+		System.out.println(doublesAreCloseAbsNonStrict(Double.POSITIVE_INFINITY, 1.0, 1e-6) == false);
+		System.out.println(doublesAreCloseAbsNonStrict(Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, 1e-6) == true);
+		System.out.println(doublesAreCloseAbsNonStrict(Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, 1e-6) == false);
+		System.out.println(doublesAreCloseAbsNonStrict(Double.POSITIVE_INFINITY, Double.NaN, 1e-6) == false);
 	}
 }

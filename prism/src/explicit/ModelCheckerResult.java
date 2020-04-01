@@ -36,6 +36,8 @@ public class ModelCheckerResult
 {
 	// Solution vector
 	public double[] soln = null;
+	// Precision
+	public double precision = Double.POSITIVE_INFINITY;
 	// Solution vector from previous iteration
 	public double[] lastSoln = null;
 	// Iterations performed

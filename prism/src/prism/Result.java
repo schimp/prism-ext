@@ -39,6 +39,9 @@ public class Result
 {
 	// The result of model checking
 	private Object result;
+	
+	public Double precision = null;
+	
 	// Explanatory text for result (optional)
 	private String explanation;
 	// Counterexample (optional)
@@ -158,10 +161,19 @@ public class Result
 	 */
 	public String getResultString()
 	{
-		String s = result.toString();
+		String s = getResultAndPrecision();
 		if (explanation != null)
 			s += " (" + explanation +")";
 		return s;
+	}
+	
+	private String getResultAndPrecision()
+	{
+		if (result instanceof Double && precision != null) {
+			return result + " (+/- " + precision + ") (rel err " + (precision / ((Double) result)) + ")";
+		} else {
+			return result.toString();
+		}
 	}
 	
 	/**
