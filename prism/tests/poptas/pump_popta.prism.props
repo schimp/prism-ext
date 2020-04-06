@@ -1,0 +1,12 @@
+// RESULT (h0=2,h1=16,N=3): [0.020656523490556817,0.026807197082692098] (grid resolution 16)
+Pmin=? [ F correct=1 ]
+
+// RESULT (h0=2,h1=16,N=3): [0.9731909334062754,0.9793309413525038] (grid resolution 16)
+Pmax=? [ F correct=1 ]
+
+//Rmin=? [ F l=2 ]
+
+//Rmin=? [ F l=2 ]
+
+
+
