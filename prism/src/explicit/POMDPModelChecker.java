@@ -28,8 +28,12 @@
 package explicit;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.BitSet;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +42,7 @@ import java.util.TreeSet;
 
 import explicit.rewards.MDPRewards;
 import explicit.rewards.MDPRewardsSimple;
+import prism.Pair;
 import prism.PrismComponent;
 import prism.PrismException;
 import prism.PrismNotSupportedException;
@@ -436,6 +441,261 @@ public class POMDPModelChecker extends ProbModelChecker
 		double innerBound = mcRes.soln[0];
 		mainLog.println("Inner bound: " + innerBound);
 
+		// Finished fixed-resolution grid approximation
+		timer = System.currentTimeMillis() - timer;
+		mainLog.print("\nFixed-resolution grid approximation (" + (min ? "min" : "max") + ")");
+		mainLog.println(" took " + timer / 1000.0 + " seconds.");
+
+		// Extract Store result
+		double lowerBound = Math.min(innerBound, outerBound);
+		double upperBound = Math.max(innerBound, outerBound);
+		mainLog.println("Result bounds: [" + lowerBound + "," + upperBound + "]");
+		double soln[] = new double[simplePOMDP.getNumStates()];
+		for (int initialState : simplePOMDP.getInitialStates()) {
+			soln[initialState] = (lowerBound + upperBound) / 2.0;
+		}
+
+		// Return results
+		ModelCheckerResult res = new ModelCheckerResult();
+		res.soln = soln;
+		res.precision = (upperBound - lowerBound) / 2.0;
+		res.numIters = iters;
+		res.timeTaken = timer / 1000.0;
+		return res;
+	}
+
+	/**
+	 * Compute expected reachability rewards.
+	 * i.e. compute the min/max reward accumulated to reach a state in {@code target}.
+	 * @param pomdp The POMDP
+	 * @param mdpRewards The rewards
+	 * @param target Target states
+	 * @param min Min or max rewards (true=min, false=max)
+	 */
+	public ModelCheckerResult computeMultiReachRewards(POMDP pomdp, MDPRewards mdpRewards1, MDPRewards mdpRewards2, BitSet target, boolean min, int numPoints) throws PrismException
+	{
+		ModelCheckerResult res = null;
+		long timer;
+		String stratFilename = null;
+		
+		// Check for multiple initial states 
+		if (pomdp.getNumInitialStates() > 1) {
+			throw new PrismNotSupportedException("POMDP model checking does not yet support multiple initial states");
+		}
+		
+		// Start expected reachability
+		timer = System.currentTimeMillis();
+		mainLog.println("\nStarting expected reachability (" + (min ? "min" : "max") + ")...");
+
+		// If required, create/initialise strategy storage
+		if (genStrat || exportAdv) {
+			stratFilename = exportAdvFilename;
+		}
+
+		// Compute rewards
+		res = computeMultiReachRewardsFixedGrid(pomdp, mdpRewards1, mdpRewards2, target, min, numPoints, stratFilename);
+
+		// Finished expected reachability
+		timer = System.currentTimeMillis() - timer;
+		mainLog.println("Expected reachability took " + timer / 1000.0 + " seconds.");
+
+		// Update time taken
+		res.timeTaken = timer / 1000.0;
+		return res;
+	}
+
+	/**
+	 * Compute expected reachability rewards using Lovejoy's fixed-resolution grid approach.
+	 * Optionally, store optimal (memoryless) strategy info. 
+	 * @param pomdp The POMMDP
+	 * @param mdpRewards The rewards
+	 * @param target Target states
+	 * @param inf States for which reward is infinite
+	 * @param min Min or max rewards (true=min, false=max)
+	 * @param strat Storage for (memoryless) strategy choice indices (ignored if null)
+	 */
+	protected ModelCheckerResult computeMultiReachRewardsFixedGrid(POMDP pomdp, MDPRewards mdpRewards1, MDPRewards mdpRewards2, BitSet target, boolean min, int numPoints, String stratFilename) throws PrismException
+	{
+		if (!(pomdp instanceof POMDPSimple)) {
+			throw new PrismException("Sorry, FixedGrid does not support POMDP other than POMDPSimple.");
+		}
+		POMDPSimple simplePOMDP = (POMDPSimple) pomdp;
+
+		// Start fixed-resolution grid approximation
+		long timer = System.currentTimeMillis();
+		mainLog.println("Starting fixed-resolution grid approximation (" + (min ? "min" : "max") + ")...");
+
+		// Find out the observations for the target states
+		TreeSet<Integer> targetObservsSet = new TreeSet<>();
+		for (int bit = target.nextSetBit(0); bit >= 0; bit = target.nextSetBit(bit + 1)) {
+			targetObservsSet.add(simplePOMDP.getObservation(bit));
+		}
+		LinkedList<Integer> targetObservs = new LinkedList<>(targetObservsSet);
+
+		// Initialise the grid points
+		ArrayList<Belief> gridPoints = new ArrayList<>();//the set of grid points (discretized believes)
+		ArrayList<Belief> unknownGridPoints = new ArrayList<>();//the set of unknown grid points (discretized believes)
+		initialiseGridPoints(simplePOMDP, targetObservs, gridPoints, unknownGridPoints);
+		int unK = unknownGridPoints.size();
+		mainLog.print("Grid statistics: resolution=" + gridResolution);
+		mainLog.println(", points=" + gridPoints.size() + ", unknown points=" + unK);
+		
+		// Construct grid belief "MDP" (over all unknown grid points_)
+		mainLog.println("Building belief space approximation...");
+		List<List<HashMap<Integer, Double>>> observationProbs = new ArrayList<>();// memoization for reuse
+		List<List<HashMap<Integer, Belief>>> nextBelieves = new ArrayList<>();// memoization for reuse
+		buildBeliefMDP(simplePOMDP, unknownGridPoints, observationProbs, nextBelieves);
+		
+		double innerBound = 0, outerBound = 0;
+		int iters = 0;
+		
+		HashMap<Double,Pair<Double,Double>> paretoPoints = new HashMap<>();
+		for (int w = 0; w < numPoints; w++) {
+
+			double weights[] = new double[] { w / (numPoints - 1.0), 1.0 - w / (numPoints - 1.0) };
+			mainLog.println("\nWeights: " + Arrays.toString(weights));
+
+			// Rewards
+			MDPRewardsSimple mdpRewards = new MDPRewardsSimple(simplePOMDP.getNumStates());
+			for (int i = 0; i < simplePOMDP.getNumStates(); i++) {
+				mdpRewards.setStateReward(i, weights[0] * mdpRewards1.getStateReward(i) + weights[1] * mdpRewards2.getStateReward(i));
+				int numChoices = simplePOMDP.getNumChoices(i);
+				for (int j = 0; j < numChoices; j++) {
+					mdpRewards.setTransitionReward(i, j,
+							weights[0] * mdpRewards1.getTransitionReward(i, j) + weights[1] * mdpRewards2.getTransitionReward(i, j));
+				}
+			}
+			List<List<Double>> rewards = new ArrayList<>(); // memoization for reuse
+			for (int i = 0; i < unK; i++) {
+				Belief b = unknownGridPoints.get(i);
+				int numChoices = simplePOMDP.getNumChoicesForObservation(b.so);
+				List<Double> action_reward = new ArrayList<>();// for memoization
+				for (int a = 0; a < numChoices; a++) {
+					action_reward.add(simplePOMDP.getCostAfterAction(b, a, mdpRewards)); // c(a,b)
+				}
+				rewards.add(action_reward);
+			}
+
+			// HashMap for storing real time values for the discretized grid belief states
+			HashMap<Belief, Double> vhash = new HashMap<>();
+			HashMap<Belief, Double> vhash_backUp = new HashMap<>();
+			for (Belief g : gridPoints) {
+				vhash.put(g, 0.0);
+				vhash_backUp.put(g, 0.0);
+			}
+
+			// Start iterations
+			mainLog.println("Solving belief space approximation...");
+			long timer2 = System.currentTimeMillis();
+			double value, chosenValue;
+			iters = 0;
+			boolean done = false;
+			while (!done && iters < maxIters) {
+				// Iterate over all (unknown) grid points
+				for (int i = 0; i < unK; i++) {
+					Belief b = unknownGridPoints.get(i);
+					int numChoices = simplePOMDP.getNumChoicesForObservation(b.so);
+					chosenValue = min ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
+					for (int a = 0; a < numChoices; a++) {
+						value = rewards.get(i).get(a);
+						for (Map.Entry<Integer, Double> entry : observationProbs.get(i).get(a).entrySet()) {
+							int o = entry.getKey();
+							double observationProb = entry.getValue();
+							Belief nextBelief = nextBelieves.get(i).get(a).get(o);
+							// find discretized grid points to approximate the nextBelief
+							value += observationProb * interpolateOverGrid(o, nextBelief, vhash_backUp);
+						}
+						if ((min && chosenValue - value > 1.0e-6) || (!min && value - chosenValue > 1.0e-6)) {
+							chosenValue = value;
+						}
+					}
+					//update V(b) to the chosenValue
+					vhash.put(b, chosenValue);
+				}
+				// Check termination
+				done = PrismUtils.hashMapsAreClose(vhash, vhash_backUp, termCritParam, termCrit == TermCrit.RELATIVE);
+				// back up	
+				Set<Map.Entry<Belief, Double>> entries = vhash.entrySet();
+				for (Map.Entry<Belief, Double> entry : entries) {
+					vhash_backUp.put(entry.getKey(), entry.getValue());
+				}
+				iters++;
+			}
+			// Non-convergence is an error (usually)
+			if (!done && errorOnNonConverge) {
+				String msg = "Iterative method did not converge within " + iters + " iterations.";
+				msg += "\nConsider using a different numerical method or increasing the maximum number of iterations";
+				throw new PrismException(msg);
+			}
+			timer2 = System.currentTimeMillis() - timer2;
+			mainLog.print("Belief space value iteration (" + (min ? "min" : "max") + ")");
+			mainLog.println(" took " + iters + " iterations and " + timer2 / 1000.0 + " seconds.");
+
+			// find discretized grid points to approximate the initialBelief
+			Belief initialBelief = simplePOMDP.getInitialBelief();
+			outerBound = interpolateOverGrid(initialBelief.so, initialBelief, vhash_backUp);
+			mainLog.println("Outer bound: " + outerBound);
+
+			// Build DTMC to get inner bound (and strategy)
+			mainLog.println("\nBuilding strategy-induced model...");
+			List<Belief> listBeliefs = new ArrayList<>();
+			MDPSimple mdp = buildStrategyModel(simplePOMDP, mdpRewards, vhash, vhash_backUp, target, min, listBeliefs);
+			mainLog.print("Strategy-induced model: " + mdp.infoString());
+			// Build rewards too
+			MDPRewardsSimple mdpRewardsNew = new MDPRewardsSimple(mdp.getNumStates());
+			MDPRewardsSimple mdpRewardsNew1 = new MDPRewardsSimple(mdp.getNumStates());
+			MDPRewardsSimple mdpRewardsNew2 = new MDPRewardsSimple(mdp.getNumStates());
+			int numStates = mdp.getNumStates();
+			for (int ii = 0; ii < numStates; ii++) {
+				if (mdp.getNumChoices(ii) > 0) {
+					int action = ((Integer) mdp.getAction(ii, 0));
+					double rew1 = simplePOMDP.getCostAfterAction(listBeliefs.get(ii), action, mdpRewards1);
+					double rew2 = simplePOMDP.getCostAfterAction(listBeliefs.get(ii), action, mdpRewards2);
+					mdpRewardsNew.addToStateReward(ii, weights[0] * rew1 + weights[1] * rew2);
+					mdpRewardsNew1.addToStateReward(ii, rew1);
+					mdpRewardsNew2.addToStateReward(ii, rew2);
+				}
+			}
+			// Export?
+			if (stratFilename != null) {
+				mdp.exportToPrismExplicitTra(stratFilename);
+				mdp.exportToDotFile(stratFilename + ".dot", mdp.getLabelStates("target"));
+				//			for (int ii = 0; ii < mdp.getNumStates(); ii++) {
+				//				System.out.println(ii + ":" + listBeliefs.get(ii));
+				//			}
+			}
+
+			// Create MDP model checker (disable strat generation - if enabled, we want the POMDP one) 
+			MDPModelChecker mcMDP = new MDPModelChecker(this);
+			mcMDP.setExportAdv(false);
+			mcMDP.setGenStrat(false);
+			// Solve MDP to get inner bound
+			ModelCheckerResult mcRes = mcMDP.computeReachRewards(mdp, mdpRewardsNew, mdp.getLabelStates("target"), true);
+			ModelCheckerResult mcRes1 = mcMDP.computeReachRewards(mdp, mdpRewardsNew1, mdp.getLabelStates("target"), true);
+			ModelCheckerResult mcRes2 = mcMDP.computeReachRewards(mdp, mdpRewardsNew2, mdp.getLabelStates("target"), true);
+			innerBound = mcRes.soln[0];
+			mainLog.println("Inner bound: " + innerBound);
+			double lowerBound = Math.min(innerBound, outerBound);
+			double upperBound = Math.max(innerBound, outerBound);
+			mainLog.println("Result bounds: [" + lowerBound + "," + upperBound + "]");
+			mainLog.println("Individual objectives (for weights " + Arrays.toString(weights) + "): " + mcRes1.soln[0] + ", " + mcRes2.soln[0]);
+			paretoPoints.put(weights[0], new Pair<Double,Double>(mcRes1.soln[0], mcRes2.soln[0]));
+		}
+		
+		// Sort/uniquify point list and print
+		mainLog.println("\nPareto point list: " + paretoPoints);
+		mainLog.println("Pareto curve:");
+		ArrayList<Pair<Double,Double>> paretoList = new ArrayList<>();
+		for (Pair<Double,Double> point : paretoPoints.values()) {
+			if (!paretoList.contains(point)) {
+				paretoList.add(point);
+				mainLog.println(point.first + "\t" + point.second);
+			}
+		}
+		Comparator<Pair<Double,Double>> cmp = (Pair<Double,Double> o1, Pair<Double,Double> o2) -> (((Double) o1.first).compareTo(((Double) o2.first))); 
+		Collections.sort(paretoList, cmp);
+		//mainLog.println("Pareto: " + paretoList);
+		
 		// Finished fixed-resolution grid approximation
 		timer = System.currentTimeMillis() - timer;
 		mainLog.print("\nFixed-resolution grid approximation (" + (min ? "min" : "max") + ")");
